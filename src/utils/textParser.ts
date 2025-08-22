@@ -1,4 +1,3 @@
-// utils/textParser.ts
 export interface ParsedVacancyData {
     position?: string;
     employmentType?: string;
@@ -116,4 +115,11 @@ export function parseVacancyText(text: string): ParsedVacancyData {
     }
 
     return result;
+}
+
+// helper: extract first number from salary string
+export function extractSalaryNumber(salaryStr?: string): number | null {
+  if (!salaryStr) return null;
+  const match = salaryStr.replace(/\s+/g, '').match(/(\d{2,6})/);
+  return match ? parseInt(match[1], 10) : null;
 }

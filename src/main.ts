@@ -6,6 +6,7 @@ import Vacancy from './models/Vacancy';
 
 import { Op } from 'sequelize';
 import { sequelize } from './config/database';
+import { extractSalaryNumber } from './utils/textParser';
 import {
   apiId,
   apiHash,
@@ -22,25 +23,25 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// Routes
 app.get('/', async (req, res) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 20;
     const offset = (page - 1) * limit;
 
-    // Search functionality
     const search = req.query.search as string;
 
-    // Filters
-    const typeFilters = req.query.type ? (Array.isArray(req.query.type) ? req.query.type : [req.query.type]) : [];
-    const experienceFilters = req.query.experience ? (Array.isArray(req.query.experience) ? req.query.experience : [req.query.experience]) : [];
-    const sphereFilters = req.query.sphere ? (Array.isArray(req.query.sphere) ? req.query.sphere : [req.query.sphere]) : [];
+    const normalize = (q: any): string[] =>
+      q ? (Array.isArray(q) ? q : [q as string]) : [];
 
-    // Build where clause
+    const typeFilters = normalize(req.query.type);
+    const experienceFilters = normalize(req.query.experience);
+    const sphereFilters = normalize(req.query.sphere);
+    const salaryFilters = normalize(req.query.salary);
+    const freshnessFilters = normalize(req.query.freshness);
+
     const whereClause: any = {};
 
-    // Search in text, position, and sphere
     if (search) {
       whereClause[Op.or] = [
         { text: { [Op.like]: `%${search}%` } },
@@ -49,7 +50,6 @@ app.get('/', async (req, res) => {
       ];
     }
 
-    // Apply filters
     if (typeFilters.length > 0) {
       whereClause.employmentType = { [Op.in]: typeFilters };
     }
@@ -58,35 +58,35 @@ app.get('/', async (req, res) => {
       whereClause.sphere = { [Op.in]: sphereFilters };
     }
 
-    // Experience filter (this would need to be parsed from text or salary)
-    if (experienceFilters.length > 0) {
-      const experienceConditions = experienceFilters.map(exp => {
-        if (exp === 'Меньше года') {
-          return { text: { [Op.like]: '%меньше года%' } };
-        } else if (exp === '1-3 года') {
-          return {
-            text: {
-              [Op.or]: [
-                { [Op.like]: '%1-3 года%' },
-                { [Op.like]: '%от 1%' },
-                { [Op.like]: '%от 2%' }
-              ]
-            }
-          };
-        } else if (exp === 'От 5 лет') {
-          return { text: { [Op.like]: '%от 5%' } };
-        }
-        return {};
-      });
+    // --- Freshness filter in SQL ---
+    if (freshnessFilters.length > 0) {
+      const now = new Date();
+      const conditions = [];
 
-      if (experienceConditions.length > 0) {
-        whereClause[Op.or] = [
-          ...(whereClause[Op.or] || []),
-          ...experienceConditions
-        ];
+      for (const f of freshnessFilters) {
+        if (f === 'today') {
+          const start = new Date();
+          start.setHours(0, 0, 0, 0);
+          conditions.push({ createdAt: { [Op.gte]: start } });
+        }
+        if (f === '3days') {
+          const d = new Date();
+          d.setDate(now.getDate() - 3);
+          conditions.push({ createdAt: { [Op.gte]: d } });
+        }
+        if (f === 'week') {
+          const d = new Date();
+          d.setDate(now.getDate() - 7);
+          conditions.push({ createdAt: { [Op.gte]: d } });
+        }
+      }
+
+      if (conditions.length > 0) {
+        whereClause[Op.or] = [...(whereClause[Op.or] || []), ...conditions];
       }
     }
 
+    // fetch from DB
     const { count, rows } = await Vacancy.findAndCountAll({
       where: whereClause,
       order: [['createdAt', 'DESC']],
@@ -94,8 +94,29 @@ app.get('/', async (req, res) => {
       offset,
     });
 
+    // convert Sequelize models → plain objects
+    let vacancies = rows.map(v => v.toJSON() as any);
+
+    // --- Salary filter in JS ---
+    if (salaryFilters.length > 0) {
+      vacancies = vacancies.filter((vac: any) => {
+        const num = extractSalaryNumber(vac.salary);
+        if (!num) return false;
+
+        return salaryFilters.some(range => {
+          const [min, max] = range.split('-').map(Number);
+          if (!isNaN(min) && !isNaN(max)) {
+            return num >= min && num <= max;
+          } else if (!isNaN(min)) {
+            return num >= min;
+          }
+          return false;
+        });
+      });
+    }
+
     res.json({
-      vacancies: rows,
+      vacancies,
       pagination: {
         currentPage: page,
         totalPages: Math.ceil(count / limit),
@@ -109,6 +130,7 @@ app.get('/', async (req, res) => {
   }
 });
 
+// parse for the vacancies
 app.post('/parse', async (req, res) => {
   try {
     const channels = ['@comeinlena', '@comeindesign', '@work_editor'];
@@ -131,6 +153,39 @@ app.post('/parse', async (req, res) => {
   } catch (error) {
     console.error('Error during parsing:', error);
     res.status(500).json({ error: 'Failed to parse channels' });
+  }
+});
+
+// Edit it
+app.put('/edit/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+
+    const vacancy = await Vacancy.findByPk(id);
+    if (!vacancy) return res.status(404).json({ error: 'Vacancy not found' });
+
+    await vacancy.update(updates);
+    res.json({ success: true, vacancy });
+  } catch (error) {
+    console.error('Error editing vacancy:', error);
+    res.status(500).json({ error: 'Failed to edit vacancy' });
+  }
+});
+
+// Delete vacancy
+app.delete('/delete/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const vacancy = await Vacancy.findByPk(id);
+    if (!vacancy) return res.status(404).json({ error: 'Vacancy not found' });
+
+    await vacancy.destroy();
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting vacancy:', error);
+    res.status(500).json({ error: 'Failed to delete vacancy' });
   }
 });
 
