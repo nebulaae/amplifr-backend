@@ -1,9 +1,10 @@
 import cors from 'cors';
 import dotenv from 'dotenv';
+import cron from 'node-cron';
 import express from 'express';
 import Vacancy from './models/Vacancy';
-import { Op } from 'sequelize';
 
+import { Op } from 'sequelize';
 import { sequelize } from './config/database';
 import {
   apiId,
@@ -131,6 +132,29 @@ app.post('/parse', async (req, res) => {
     console.error('Error during parsing:', error);
     res.status(500).json({ error: 'Failed to parse channels' });
   }
+});
+
+// Function to run parsing logic directly (without HTTP request)
+async function runParsingJob() {
+  const channels = ['@comeinlena', '@comeindesign', '@work_editor'];
+  const allVacancies = [];
+
+  for (const channel of channels) {
+    try {
+      const channelVacancies = await parseChannel(channel);
+      allVacancies.push(...channelVacancies);
+    } catch (error) {
+      console.error(`Failed to parse ${channel}:`, error);
+    }
+  }
+
+  console.log(`[CRON] Parsed ${allVacancies.length} vacancies at ${new Date().toISOString()}`);
+}
+
+// Schedule job to run every hour
+cron.schedule('0 * * * *', async () => {
+  console.log('[CRON] Running hourly parsing job...');
+  await runParsingJob();
 });
 
 // Initialize database and start server

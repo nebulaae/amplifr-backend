@@ -52,6 +52,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "input": "^1.0.1",
+    "node-cron": "^4.2.1",
     "sequelize": "^6.37.7",
     "sqlite3": "^5.1.7",
     "telegram": "^2.26.22",
