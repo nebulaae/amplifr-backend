@@ -1,3 +1,4 @@
+// Enhanced telegramService.ts with ad filtering
 import input from 'input';
 import dotenv from 'dotenv';
 import Vacancy from '../models/Vacancy';
@@ -35,7 +36,12 @@ export async function initTelegramClient() {
     }
 };
 
-// Parse function
+// Simple filter: if there are hashtags, it's probably a vacancy
+function hasHashtags(text: string): boolean {
+    return /#\w+/.test(text);
+}
+
+// Parse function with enhanced filtering
 export async function parseChannel(channelUsername: string) {
     if (!telegramClient) {
         throw new Error('Telegram client not initialized');
@@ -48,6 +54,11 @@ export async function parseChannel(channelUsername: string) {
 
         for (const message of messages) {
             if (message.text && message.text.length > 50) {
+                // Super simple filter: if no hashtags, skip it
+                if (!hasHashtags(message.text)) {
+                    continue;
+                }
+
                 // Parse additional data from text
                 const parsedData = parseVacancyText(message.text);
 
@@ -72,7 +83,6 @@ export async function parseChannel(channelUsername: string) {
                 }
             }
         }
-
         return vacancies;
     } catch (error) {
         console.error(`Error parsing channel ${channelUsername}:`, error);
